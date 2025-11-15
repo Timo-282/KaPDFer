@@ -157,14 +157,18 @@
 
         status.textContent = 'DOCX wird erstellt...';
         const blob = await createDocxBlobFromText(text);
-        lastBlob = blob;
 
         const url = URL.createObjectURL(blob);
+        const fileName = (file.name.replace(/\.pdf$/i,'') || 'export') + '.docx';
+
+        const downloadBtn = document.getElementById("downloadBtn");
         downloadBtn.href = url;
-        downloadBtn.download = (file.name.replace(/\.pdf$/i,'') || 'export') + '.docx';
-        downloadBtn.style.pointerEvents = 'auto'; downloadBtn.style.opacity = '1';
+        downloadBtn.download = fileName;
+        downloadBtn.style.pointerEvents = 'auto';
+        downloadBtn.style.opacity = '1';
+
         status.textContent = 'Fertig — Datei herunterladen';
-        log('DOCX bereit:', downloadBtn.download);
+        log('DOCX bereit:', fileName);
 
       } catch(err){
         console.error(err);
