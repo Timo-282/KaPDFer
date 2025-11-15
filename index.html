@@ -91,7 +91,6 @@
       abortRequested = false;
       startBtn.disabled = true; cancelBtn.disabled = false; downloadLink.style.display = 'none';
 
-      // Sprachen bilden
       const langs = Array.from(document.querySelectorAll('.checkboxes input:checked')).map(i=>i.value);
       if (!langs.length) { alert('Bitte mindestens eine Sprache wählen.'); startBtn.disabled=false; cancelBtn.disabled=true; return }
       const langCombined = langs.join('+');
@@ -103,45 +102,60 @@
       const pageCount = pdf.numPages;
       log(`PDF geladen — Seiten: ${pageCount}`);
 
-      // Tesseract-Worker konfigurieren
-      log('Tesseract Worker erstellen...');
-      const worker = Tesseract.createWorker({
-        logger: m => {
-          // m: { status, progress }
-          if (m.status && m.progress!=undefined) {
-            setProgress((m.progress + 0.0) * 0.6); // OCR-Anteil
-            statusEl.textContent = `${m.status} — ${(m.progress*100).toFixed(0)}%`;
-          } else if (m.status) {
-            statusEl.textContent = m.status;
+      // Tesseract worker vorbereiten, aber noch nicht initialisieren
+      let worker = null;
+      async function ensureWorker(){
+        if (worker) return;
+        worker = Tesseract.createWorker({
+          logger: m => {
+            if (m.status && m.progress!=undefined) {
+              setProgress((m.progress) * 0.6);
+              statusEl.textContent = `${m.status} — ${(m.progress*100).toFixed(0)}%`;
+            } else if (m.status) statusEl.textContent = m.status;
           }
-        }
-      });
-
-      try {
+        });
         await worker.load();
-        // Versuche zuerst, Sprachdateien vom Standard-Tessdata-Pfad zu laden.
-        // Auf GitHub Pages kannst Du alternativ /tessdata in Deinem Repo anlegen und die .traineddata dort ablegen.
-        // worker.loadLanguage erwartet Sprachkürzel wie 'deu','eng','tur'.
-        log('Sprachdateien laden...');
         await worker.loadLanguage(langCombined);
         await worker.initialize(langCombined);
+      }
 
-        let fullText = '';
+      let fullText = '';
+
+      try {
         for (let p=1; p<=pageCount; p++){
           if (abortRequested) throw new Error('Abgebrochen');
-          log(`Seite ${p}/${pageCount} rendern...`);
+          log(`Seite ${p}/${pageCount} extrahiere Text...`);
           const page = await pdf.getPage(p);
+
+          // 1) Versuche normalen Text aus PDF zu extrahieren
+          const textContent = await page.getTextContent();
+          const extracted = textContent.items.map(i => i.str).join(' ').trim();
+
+          if (extracted.length > 20) {
+            // Genug Text: OCR NICHT nötig
+            fullText += `--- Seite ${p} (direct extraction) ---
+` + extracted + "
+
+";
+            preview.textContent = fullText.slice(0, 2000);
+            setProgress(p / pageCount);
+            continue;
+          }
+
+          // 2) Fallback auf OCR, wenn kein brauchbarer Text
+          log(`Seite ${p}: kaum Text gefunden – OCR wird verwendet...`);
+          await ensureWorker();
           const canvas = await pdfPageToImage(page, 2);
-          log(`Seite ${p}: OCR läuft...`);
           const { data: { text }} = await worker.recognize(canvas);
-          fullText += `--- Seite ${p} ---\n` + text + "\n\n";
-          // kleine Vorschau aktualisieren
-          preview.textContent = fullText.slice(0, 2000) || '—';
-          setProgress(p / pageCount * 0.35 + 0.65 * (Math.min(p/pageCount,1)) );
+          fullText += `--- Seite ${p} (OCR) ---
+` + text + "
+
+";
+          preview.textContent = fullText.slice(0, 2000);
+          setProgress(p / pageCount);
         }
 
         log('Fertig. TXT wird erstellt...');
-        // TXT Download erzeugen
         const blob = new Blob([fullText], {type:'text/plain;charset=utf-8'});
         const url = URL.createObjectURL(blob);
         downloadLink.href = url;
@@ -151,15 +165,10 @@
         preview.textContent = fullText.slice(0, 10000);
         log('Fertig.');
       } catch (err){
-        if (err.message === 'Abgebrochen') {
-          log('Abgebrochen.');
-        } else {
-          console.error(err);
-          log('Fehler: ' + (err.message || err));
-          alert('Fehler: ' + (err.message || err));
-        }
+        if (err.message === 'Abgebrochen') log('Abgebrochen.');
+        else { console.error(err); log('Fehler: ' + (err.message || err)); alert('Fehler: ' + (err.message || err)); }
       } finally {
-        try{ await worker.terminate(); }catch(e){}
+        if (worker) { try{ await worker.terminate(); }catch(e){} }
         startBtn.disabled = false; cancelBtn.disabled = true;
         setProgress(1);
       }
@@ -188,5 +197,8 @@
     });
 
   </script>
+</body>
+</html>
+
 </body>
 </html>
