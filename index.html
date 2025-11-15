@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PDF → DOCX (client-side)</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;max-width:900px;margin:32px auto;padding:0 16px;color:#111}
+    header{display:flex;gap:12px;align-items:center}
+    h1{font-size:1.25rem;margin:0}
+    main{margin-top:18px}
+    .card{border:1px solid #e6e6e6;border-radius:8px;padding:16px;background:#fff}
+    label{display:block;margin-bottom:8px;font-weight:600}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    button{padding:8px 12px;border-radius:6px;border:1px solid #ccc;background:#f7f7f7;cursor:pointer}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    pre{white-space:pre-wrap;background:#f6f8fa;padding:12px;border-radius:6px}
+    footer{margin-top:18px;color:#666;font-size:.9rem}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PDF → DOCX (rein client-seitig, für GitHub Pages)</h1>
+  </header>
+
+  <main>
+    <section class="card">
+      <label for="file">PDF auswählen</label>
+      <input id="file" type="file" accept="application/pdf">
+
+      <div style="height:12px"></div>
+
+      <div class="controls">
+        <button id="convertBtn">Konvertieren ➜ DOCX</button>
+        <button id="downloadBtn" disabled>Herunterladen</button>
+        <div id="status" style="align-self:center;color:#444">Bereit</div>
+      </div>
+
+      <hr style="margin:12px 0">
+      <div>
+        <strong>Hinweis:</strong>
+        <ul>
+          <li>Diese Seite läuft komplett im Browser — deine PDF-Datei verlässt deinen Rechner nicht.</li>
+          <li>Für gescannte PDFs (Bilder) ist OCR nötig (z. B. <code>Tesseract.js</code>); diese Datei extrahiert nur echten Text aus PDFs.</li>
+          <li>Layout, Bilder und komplexe Tabellendarstellungen werden nicht 1:1 übernommen — nur Rohtext.</li>
+        </ul>
+      </div>
+
+      <hr style="margin:12px 0">
+      <details>
+        <summary>Protokoll / Ausgaben</summary>
+        <pre id="log">—</pre>
+      </details>
+    </section>
+
+    <footer>
+      Datei auf GitHub hochladen (index.html) → Pages aktivieren (Branch: main oder gh-pages).<br>
+      Wenn du OCR brauchst, sag Bescheid — ich kann dir eine Version mit Tesseract.js vorbereiten.
+    </footer>
+  </main>
+
+  <!-- PDF.js (UMD build) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <script>
+    // Worker-URL (CDN)
+    if(window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+    }
+  </script>
+
+  <!-- docx (UMD build) -->
+  <script src="https://unpkg.com/docx@7.6.2/build/index.umd.js"></script>
+
+  <script>
+    // Kurz: Zugriff auf UI
+    const fileInput = document.getElementById('file');
+    const convertBtn = document.getElementById('convertBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const status = document.getElementById('status');
+    const logEl = document.getElementById('log');
+
+    let lastBlob = null;
+
+    function log(...args){
+      const line = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+      logEl.textContent = (logEl.textContent === '—' ? '' : logEl.textContent + '\n') + line;
+      console.log(...args);
+    }
+
+    async function arrayBufferFromFile(file){
+      return await file.arrayBuffer();
+    }
+
+    async function extractTextFromPdf(arrayBuffer){
+      log('PDF laden (ArrayBuffer) — Größe:', arrayBuffer.byteLength, 'Bytes');
+      const loadingTask = window.pdfjsLib.getDocument({data: arrayBuffer});
+      const pdf = await loadingTask.promise;
+      const pages = pdf.numPages;
+      log('Seitenanzahl:', pages);
+
+      const texts = [];
+      for(let p=1; p<=pages; p++){
+        status.textContent = `Seite ${p} / ${pages} lesen...`;
+        const page = await pdf.getPage(p);
+        const textContent = await page.getTextContent();
+        // textContent.items sind Textfragmente; wir verbinden sie
+        const pageText = textContent.items.map(i => i.str).join('\n');
+        texts.push(pageText);
+        log(`Seite ${p}: ${pageText.length} Zeichen`);
+      }
+
+      status.textContent = 'Fertig: Text extrahiert';
+      return texts.join('\n\n');
+    }
+
+    function createDocxBlobFromText(text){
+      log('DOCX generieren — Zeichen:', text.length);
+      const { Document, Packer, Paragraph } = window.docx;
+
+      const doc = new Document({sections: [{children: []}]});
+
+      // Einfache Strategie: Abschnitt pro Seite, Absätze nach Zeilen
+      const pages = text.split('\n\n');
+      pages.forEach((pageText, idx) => {
+        const lines = pageText.split('\n').filter(Boolean);
+        if(lines.length === 0) {
+          doc.addSection({children: [new Paragraph('')]});
+        } else {
+          const paras = lines.map(line => new Paragraph(line));
+          // append to the single section
+          doc.addSection({children: paras});
+        }
+      });
+
+      return Packer.toBlob(doc);
+    }
+
+    convertBtn.addEventListener('click', async ()=>{
+      log('Konvertierung gestartet');
+      const file = fileInput.files && fileInput.files[0];
+      if(!file){ alert('Bitte zuerst eine PDF-Datei auswählen.'); return; }
+
+      convertBtn.disabled = true;
+      downloadBtn.disabled = true;
+      status.textContent = 'PDF wird gelesen...';
+
+      try{
+        const buffer = await arrayBufferFromFile(file);
+        const text = await extractTextFromPdf(buffer);
+
+        if(!text || text.trim().length === 0){
+          alert('Kein extrahierbarer Text gefunden. Möglicherweise ist die PDF gescannt (Bild). Für gescannte PDFs ist OCR nötig.');
+          status.textContent = 'Keine Textinhalte gefunden';
+          convertBtn.disabled = false;
+          return;
+        }
+
+        status.textContent = 'DOCX wird erstellt...';
+        const blob = await createDocxBlobFromText(text);
+        lastBlob = blob;
+
+        const url = URL.createObjectURL(blob);
+        downloadBtn.href = url;
+        downloadBtn.download = (file.name.replace(/\.pdf$/i,'') || 'export') + '.docx';
+        downloadBtn.disabled = false;
+        status.textContent = 'Fertig — Datei herunterladen';
+        log('DOCX bereit:', downloadBtn.download);
+
+      } catch(err){
+        console.error(err);
+        log('FEHLER:', err && err.message ? err.message : err);
+        alert('Fehler bei der Konvertierung: ' + (err.message || err));
+        status.textContent = 'Fehler';
+      } finally{
+        convertBtn.disabled = false;
+      }
+    });
+
+    // Download-Button: make it an <a>
+    (function promoteDownloadButton(){
+      const a = document.createElement('a');
+      a.id = 'downloadBtn';
+      a.textContent = 'Herunterladen';
+      a.style.padding = '8px 12px';
+      a.style.borderRadius = '6px';
+      a.style.border = '1px solid #ccc';
+      a.style.background = '#f7f7f7';
+      a.style.textDecoration = 'none';
+      a.style.color = 'inherit';
+      a.disabled = true;
+
+      const old = document.getElementById('downloadBtn');
+      old.parentNode.replaceChild(a, old);
+    })();
+
+  </script>
+  <!-- Tesseract.js OCR -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script>
+    // OCR-Funktion für Bild-basierte Seiten
+    async function runOcrOnPage(page) {
+      const viewport = page.getViewport({ scale: 1 });
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      const { data: { text } } = await Tesseract.recognize(canvas, 'deu+eng+tur', {
+        logger: m => log('OCR:', m.status, m.progress)
+      })(canvas, 'deu', {
+        logger: m => log('OCR:', m.status, m.progress)
+      });
+
+      return text;
+    }
+
+    // Erkennung: hat die Seite Text? Wenn nein → OCR
+    async function extractTextFromPdf(arrayBuffer){
+      log('PDF laden (ArrayBuffer) — OCR-Version');
+      const loadingTask = window.pdfjsLib.getDocument({data: arrayBuffer});
+      const pdf = await loadingTask.promise;
+      const pages = pdf.numPages;
+      const texts = [];
+
+      for(let p=1; p<=pages; p++){
+        status.textContent = `Seite ${p} / ${pages} wird verarbeitet...`;
+        const page = await pdf.getPage(p);
+        const textContent = await page.getTextContent();
+
+        let pageText = textContent.items.map(i => i.str).join('
+');
+
+        if(!pageText || pageText.trim().length < 5) {
+          log(`Seite ${p}: kaum/kein Text → OCR wird genutzt`);
+          pageText = await runOcrOnPage(page);
+        }
+
+        texts.push(pageText);
+      }
+
+      return texts.join('
+
+');
+    }
+  </script>
+</body>
+</html>
