@@ -69,7 +69,7 @@
   </script>
 
   <!-- docx (UMD build) -->
-  <script src="https://unpkg.com/docx@8.6.0/build/index.umd.js"></script>
+  <script src="https://unpkg.com/docx@7.6.2/build/index.umd.js"></script>
 
   <script>
     // Kurz: Zugriff auf UI
@@ -113,23 +113,11 @@
       return texts.join('\n\n');
     }
 
-    function createDocxBlobFromText(text){
-      log('DOCX generieren — Zeichen:', text.length);
-      const { Document, Packer, Paragraph } = window.docx;
+    function createTxtBlobFromText(text){
+      log('TXT generieren — Zeichen:', text.length);
+      return new Blob([text], { type: 'text/plain' });
+    }
 
-      const doc = new Document({sections: [{children: []}]});
-
-      // Einfache Strategie: Abschnitt pro Seite, Absätze nach Zeilen
-      const pages = text.split('\n\n');
-      pages.forEach((pageText, idx) => {
-        const lines = pageText.split('\n').filter(Boolean);
-        if(lines.length === 0) {
-          doc.addSection({children: [new Paragraph('')]});
-        } else {
-          const paras = lines.map(line => new Paragraph(line));
-          // append to the single section
-          doc.addSection({children: paras});
-        }
       });
 
       return Packer.toBlob(doc);
@@ -155,20 +143,17 @@
           return;
         }
 
-        status.textContent = 'DOCX wird erstellt...';
-        const blob = await createDocxBlobFromText(text);
+        status.textContent = 'TXT wird erstellt...';
+        const blob = await createTxtBlobFromText(text);
 
         const url = URL.createObjectURL(blob);
-        const fileName = (file.name.replace(/\.pdf$/i,'') || 'export') + '.docx';
+        const fileName = (file.name.replace(/\.pdf$/i,'') || 'export') + '.txt';
 
-        const downloadBtn = document.getElementById("downloadBtn");
         downloadBtn.href = url;
         downloadBtn.download = fileName;
-        downloadBtn.style.pointerEvents = 'auto';
-        downloadBtn.style.opacity = '1';
-
+        downloadBtn.style.pointerEvents = 'auto';.pointerEvents = 'auto'; downloadBtn.style.opacity = '1';
         status.textContent = 'Fertig — Datei herunterladen';
-        log('DOCX bereit:', fileName);
+        log('DOCX bereit:', downloadBtn.download);
 
       } catch(err){
         console.error(err);
