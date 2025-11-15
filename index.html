@@ -69,8 +69,7 @@
   </script>
 
   <!-- docx (UMD build) -->
-  <script src="https://unpkg.com/docx@8.6.0/build/index.umd.js"></script>
-
+  <script src="https://unpkg.com/docx@7.6.2/build/index.umd.js"></script>
 
   <script>
     // Kurz: Zugriff auf UI
@@ -142,7 +141,7 @@
       if(!file){ alert('Bitte zuerst eine PDF-Datei auswählen.'); return; }
 
       convertBtn.disabled = true;
-      downloadBtn.disabled = true;
+      downloadBtn.style.pointerEvents = 'none'; downloadBtn.style.opacity = '0.5';
       status.textContent = 'PDF wird gelesen...';
 
       try{
@@ -163,7 +162,7 @@
         const url = URL.createObjectURL(blob);
         downloadBtn.href = url;
         downloadBtn.download = (file.name.replace(/\.pdf$/i,'') || 'export') + '.docx';
-        downloadBtn.disabled = false;
+        downloadBtn.style.pointerEvents = 'auto'; downloadBtn.style.opacity = '1';
         status.textContent = 'Fertig — Datei herunterladen';
         log('DOCX bereit:', downloadBtn.download);
 
@@ -188,7 +187,8 @@
       a.style.background = '#f7f7f7';
       a.style.textDecoration = 'none';
       a.style.color = 'inherit';
-      a.disabled = true;
+      // 'disabled' wird bei <a> entfernt, wir steuern die Nutzbarkeit über CSS und fehlendes href
+      a.style.pointerEvents = 'none'; a.style.opacity = '0.5';
 
       const old = document.getElementById('downloadBtn');
       old.parentNode.replaceChild(a, old);
