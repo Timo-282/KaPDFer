@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>PDF → TXT (OCR) — GitHub Pages</title>
+  <title>PDF → TXT — GitHub Pages</title>
   <style>
     :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:0}
     body{padding:24px;background:#f7f7fb;color:#111}
@@ -19,181 +19,71 @@
     .progress{height:10px;background:#e6eefc;border-radius:999px;overflow:hidden}
     .progress > i{display:block;height:100%;width:0%;background:#2563eb}
     footer{margin-top:18px;font-size:13px;color:#666}
-    .checkboxes label{display:inline-flex;align-items:center;gap:8px;margin-right:12px}
     a.download{display:inline-block;margin-left:8px}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>PDF → TXT (OCR)</h1>
-    <p class="small">Diese Seite läuft komplett im Browser und kann als statische Datei auf GitHub Pages gehostet werden. Benutzt <strong>pdf.js</strong> zum Rendern und <strong>Tesseract.js</strong> für OCR. Sprache(n) wählbar: Deutsch, Englisch, Türkisch.</p>
+    <h1>PDF → TXT</h1>
+    <p class="small">Diese Seite läuft komplett im Browser und kann als statische Datei auf GitHub Pages gehostet werden. Es wird nur der direkt aus PDF extrahierte Text verwendet.</p>
 
     <label for="file">PDF-Datei auswählen</label>
     <input id="file" type="file" accept="application/pdf">
 
-    <label>Sprachen (mehrfach wählbar)</label>
-    <div class="checkboxes">
-      <label><input type="checkbox" value="deu" checked> Deutsch (deu)</label>
-      <label><input type="checkbox" value="eng" checked> Englisch (eng)</label>
-      <label><input type="checkbox" value="tur" checked> Türkisch (tur)</label>
-    </div>
-
     <div style="margin-top:12px" class="row">
-      <button id="start">OCR starten</button>
-      <button id="cancel" disabled>Abbrechen</button>
+      <button id="start">Text extrahieren</button>
       <a id="downloadLink" class="download" style="display:none">Download TXT</a>
     </div>
-
-    <label style="margin-top:12px">Fortschritt</label>
-    <div class="progress" aria-hidden><i id="bar"></i></div>
-    <div id="status" class="small log" style="margin-top:8px">Bereit.</div>
 
     <label style="margin-top:12px">Erkannter Text (Vorschau)</label>
     <pre id="preview">—</pre>
 
-    <footer>Hinweis: Tesseract benötigt die Sprachdaten (<code>traineddata</code>). Standardmäßig wird die Seite versuchen, die Dateien vom Tesseract-Server zu laden. Wenn das nicht funktioniert, lege den Ordner <code>/tessdata</code> in Deinem GitHub Pages Repo an und kopiere dort die passenden <code>.traineddata</code>-Dateien (deu, eng, tur).</footer>
   </div>
 
   <!-- Bibliotheken (CDN) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.12.313/pdf.min.js"></script>
-  <script src="https://unpkg.com/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
 
   <script>
-    // Grundsetup für pdf.js
     if (window['pdfjsLib']) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.12.313/pdf.worker.min.js';
     }
 
     const fileInput = document.getElementById('file');
     const startBtn = document.getElementById('start');
-    const cancelBtn = document.getElementById('cancel');
-    const statusEl = document.getElementById('status');
     const preview = document.getElementById('preview');
-    const bar = document.getElementById('bar');
     const downloadLink = document.getElementById('downloadLink');
 
-    let abortRequested = false;
+    async function runExtraction(pdfFile){
+      startBtn.disabled = true;
+      preview.textContent = 'PDF wird gelesen...';
 
-    function log(s){ statusEl.textContent = s }
-    function setProgress(p){ bar.style.width = (Math.round(p*100)) + '%'; }
-
-    async function pdfPageToImage(page, scale=2){
-      const viewport = page.getViewport({scale});
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.floor(viewport.width);
-      canvas.height = Math.floor(viewport.height);
-      const ctx = canvas.getContext('2d');
-      await page.render({canvasContext: ctx, viewport}).promise;
-      return canvas;
-    }
-
-    async function runOCR(pdfFile){
-      abortRequested = false;
-      startBtn.disabled = true; cancelBtn.disabled = false; downloadLink.style.display = 'none';
-
-      const langs = Array.from(document.querySelectorAll('.checkboxes input:checked')).map(i=>i.value);
-      if (!langs.length) { alert('Bitte mindestens eine Sprache wählen.'); startBtn.disabled=false; cancelBtn.disabled=true; return }
-      const langCombined = langs.join('+');
-
-      log('PDF lesen...');
       const arrayBuffer = await pdfFile.arrayBuffer();
-      const loadingTask = pdfjsLib.getDocument({data: arrayBuffer});
-      const pdf = await loadingTask.promise;
+      const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
       const pageCount = pdf.numPages;
-      log(`PDF geladen — Seiten: ${pageCount}`);
-
-      // Tesseract worker vorbereiten, aber noch nicht initialisieren
-      let worker = null;
-      async function ensureWorker(){
-        if (worker) return;
-        worker = Tesseract.createWorker({
-          logger: m => {
-            if (m.status && m.progress!=undefined) {
-              setProgress((m.progress) * 0.6);
-              statusEl.textContent = `${m.status} — ${(m.progress*100).toFixed(0)}%`;
-            } else if (m.status) statusEl.textContent = m.status;
-          }
-        });
-        await worker.load();
-        await worker.loadLanguage(langCombined);
-        await worker.initialize(langCombined);
-      }
-
       let fullText = '';
 
-      try {
-        for (let p=1; p<=pageCount; p++){
-          if (abortRequested) throw new Error('Abgebrochen');
-          log(`Seite ${p}/${pageCount} extrahiere Text...`);
-          const page = await pdf.getPage(p);
-
-          // 1) Versuche normalen Text aus PDF zu extrahieren
-          const textContent = await page.getTextContent();
-          const extracted = textContent.items.map(i => i.str).join(' ').trim();
-
-          if (extracted.length > 20) {
-            // Genug Text: OCR NICHT nötig
-            fullText += `--- Seite ${p} (direct extraction) ---
-` + extracted + "
-
-";
-            preview.textContent = fullText.slice(0, 2000);
-            setProgress(p / pageCount);
-            continue;
-          }
-
-          // 2) Fallback auf OCR, wenn kein brauchbarer Text
-          log(`Seite ${p}: kaum Text gefunden – OCR wird verwendet...`);
-          await ensureWorker();
-          const canvas = await pdfPageToImage(page, 2);
-          const { data: { text }} = await worker.recognize(canvas);
-          fullText += `--- Seite ${p} (OCR) ---
-` + text + "
-
-";
-          preview.textContent = fullText.slice(0, 2000);
-          setProgress(p / pageCount);
-        }
-
-        log('Fertig. TXT wird erstellt...');
-        const blob = new Blob([fullText], {type:'text/plain;charset=utf-8'});
-        const url = URL.createObjectURL(blob);
-        downloadLink.href = url;
-        downloadLink.download = (pdfFile.name || 'ocr') .replace(/\.pdf$/i, '') + '.txt';
-        downloadLink.textContent = 'TXT herunterladen';
-        downloadLink.style.display = 'inline-block';
-        preview.textContent = fullText.slice(0, 10000);
-        log('Fertig.');
-      } catch (err){
-        if (err.message === 'Abgebrochen') log('Abgebrochen.');
-        else { console.error(err); log('Fehler: ' + (err.message || err)); alert('Fehler: ' + (err.message || err)); }
-      } finally {
-        if (worker) { try{ await worker.terminate(); }catch(e){} }
-        startBtn.disabled = false; cancelBtn.disabled = true;
-        setProgress(1);
+      for (let p=1; p<=pageCount; p++){
+        const page = await pdf.getPage(p);
+        const textContent = await page.getTextContent();
+        const extracted = textContent.items.map(i => i.str).join(' ').trim();
+        fullText += `--- Seite ${p} ---\n` + extracted + "\n\n";
+        preview.textContent = fullText.slice(0, 2000);
       }
+
+      const blob = new Blob([fullText], {type:'text/plain;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      downloadLink.href = url;
+      downloadLink.download = (pdfFile.name || 'extraction').replace(/\.pdf$/i, '') + '.txt';
+      downloadLink.textContent = 'TXT herunterladen';
+      downloadLink.style.display = 'inline-block';
+      preview.textContent = fullText.slice(0, 10000);
+      startBtn.disabled = false;
     }
 
     startBtn.addEventListener('click', ()=>{
       const f = fileInput.files[0];
-      if (!f) { alert('Bitte eine PDF-Datei auswählen.'); return }
-      runOCR(f);
-    });
-
-    cancelBtn.addEventListener('click', ()=>{
-      abortRequested = true;
-      cancelBtn.disabled = true;
-      log('Abbruch angefordert — warte auf Stop...');
-    });
-
-    // Drag & Drop (optional)
-    ['dragenter','dragover'].forEach(ev=>{
-      document.addEventListener(ev,e=>{ e.preventDefault(); e.dataTransfer && (e.dataTransfer.dropEffect = 'copy'); });
-    });
-    document.addEventListener('drop', e=>{
-      e.preventDefault();
-      const f = e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f && f.type === 'application/pdf') fileInput.files = e.dataTransfer.files;
+      if (!f) { alert('Bitte eine PDF-Datei auswählen.'); return; }
+      runExtraction(f);
     });
 
   </script>
